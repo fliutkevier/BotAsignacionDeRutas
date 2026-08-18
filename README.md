@@ -148,8 +148,7 @@ simula una ruta que quedó sin asignar.
 build.bat
 ```
 
-Deja todo en `dist\BOT_Asignaciones\`. Comprimí **esa carpeta entera** y
-repartila: el supervisor descomprime y ejecuta `EJECUTAR BOT.bat`. No necesita
+El supervisor descomprime y ejecuta `EJECUTAR BOT.bat`. No necesita
 Python ni Playwright, pero **sí la VPN**.
 
 Dos detalles que el `.bat` resuelve y no son obvios:
@@ -232,4 +231,3 @@ nombres de hojas y de columnas se cambian todos desde ahí.
   implementar.
 - Si la misma ruta física aparece con **dos colectores distintos**, el bot no
   elige: marca ambas filas como conflicto y no las procesa.
-- No hay tests automatizados en el repo.
