@@ -38,7 +38,9 @@ from typing import Protocol
 from playwright.sync_api import Page, sync_playwright
 
 import config
-from models import clave_rl as _clave_rl, ruta_norm as _ruta_norm
+from models import (clave_rl as _clave_rl,
+                    desempata_por_localidad as _desempata_por_localidad,
+                    ruta_norm as _ruta_norm)
 
 log = logging.getLogger(__name__)
 
@@ -292,6 +294,13 @@ class Portal:
         return False
 
     # ------------------------------------------------------- modo POR RUTA
+    def _hace_falta_localidad(self, pares: list) -> bool:
+        """Si conviene leer la columna LOCALIDAD de la grilla: solo en el turno
+        de desempate y si alguna fila la trae cargada. Fuera de ahí es una
+        lectura del DOM al pedo que además no se usa para nada."""
+        return (_desempata_por_localidad(self._turno_actual)
+                and any((loc or "").strip() for _, loc in pares))
+
     def _fetch_rutas(self, con_localidad: bool) -> tuple[list, dict]:
         """(id, texto) de las rutas de la grilla de libres y, si aplica, mapa
         NNNN -> localidad. Una sola lectura del DOM por llamada."""
@@ -310,10 +319,15 @@ class Portal:
         return datos_r, loc_map
 
     def _idxs_ruta(self, datos_r: list, loc_map: dict, ruta: str, localidad: str) -> list[str]:
-        """Sufijos NNNN de TODAS las filas que matchean la ruta (contiene) y,
-        si hay localidad, también la localidad (igual)."""
+        """Sufijos NNNN de TODAS las filas que matchean la ruta (contiene).
+
+        La LOCALIDAD se usa SOLO en el turno de desempate. Fuera de ahí la ruta
+        ya identifica la fila y filtrar por localidad solo produce falsos
+        negativos: la columna de la planilla trae otro texto que el del portal
+        (abreviado, o directamente otro nombre) y descartaba rutas que SÍ
+        estaban libres."""
         objetivo = _norm(_ruta_norm(ruta, self._turno_actual))
-        loc = _norm(localidad)
+        loc = _norm(localidad) if _desempata_por_localidad(self._turno_actual) else ""
         idxs = []
         for el_id, txt in datos_r:
             m = re.search(r"_(\d{4})$", el_id or "")
@@ -321,30 +335,44 @@ class Portal:
                 continue
             idx = m.group(1)
             if loc and loc_map.get(idx, "") != loc:
-                continue  # desempate por localidad (turno 43)
+                continue  # desempate por localidad
             idxs.append(idx)
         return idxs
 
     def _match_idx(self, datos_r: list, loc_map: dict, ruta: str, localidad: str) -> str | None:
         """Sufijo NNNN de la fila que matchea. None si 0 o >1 coincidencias."""
         idxs = self._idxs_ruta(datos_r, loc_map, ruta, localidad)
-        if len(idxs) != 1:
-            log.error("Ruta %s (localidad %r): %d coincidencias",
-                      _ruta_norm(ruta, self._turno_actual), localidad, len(idxs))
-            return None
-        return idxs[0]
+        if len(idxs) == 1:
+            return idxs[0]
+        normalizada = _ruta_norm(ruta, self._turno_actual)
+        if not idxs and _desempata_por_localidad(self._turno_actual):
+            # Distinguir "la ruta no está" de "está pero con otra localidad":
+            # sin esto el sheet dice 'no apareció en las libres' y manda a
+            # buscar un problema que no existe.
+            otras = [loc_map.get(i, "?") for i in self._idxs_ruta(
+                datos_r, loc_map, ruta, "")]
+            if otras:
+                log.error("Ruta %s: está en las libres pero con localidad %s, "
+                          "no %r", normalizada, sorted(set(otras)), localidad)
+                return None
+        log.error("Ruta %s (localidad %r): %d coincidencias",
+                  normalizada, localidad, len(idxs))
+        return None
 
     def tildar_rutas(self, pares: list[tuple[str, str]]) -> tuple[set, dict]:
         """Tilda rutas puntuales (best-effort) registrando el 'Total Leer' de
         cada fila. Devuelve (claves tildadas, {clave: cantidad}).
         Por cada ruta: _sin_mask -> re-leer grilla -> leer 'Total Leer' ->
         tildar -> VERIFICAR."""
-        con_loc = any((loc or "").strip() for _, loc in pares)
+        con_loc = self._hace_falta_localidad(pares)
         tildadas: set[tuple[str, str]] = set()
         cantidades: dict[tuple[str, str], int] = {}
-        contador_inicial = self._leer_contador()
-        if contador_inicial:
-            log.warning("El contador arranca en %d (selección residual)", contador_inicial)
+        # El contador NO se limpia al asignar: queda mostrando el total del lote
+        # anterior hasta que el primer tilde de este lo resetea. O sea que este
+        # valor es un arrastre visual, no una selección viva: no sirve de línea
+        # de base (restarlo daba deltas negativos) y no hay nada que avisar.
+        log.debug("Contador antes de tildar: %d (arrastre del lote anterior)",
+                  self._leer_contador())
         for ruta, localidad in pares:
             for intento in range(3):
                 self._sin_mask()  # nunca tildar con la página bloqueada
@@ -373,14 +401,16 @@ class Portal:
                     self._page.wait_for_timeout(600)
         if tildadas:
             self._verificar_tildes(pares, tildadas, con_loc)
-            # Control cruzado: la suma de los 'Total Leer' leídos debería ser lo
-            # que sumó el contador del portal. Si no coincide, algo se tildó o
-            # destildó de más: se avisa, no se corrige (best-effort).
+            # Control cruzado: con el lote ya tildado, el contador tiene que
+            # valer exactamente la suma de los 'Total Leer' leídos. Si no
+            # coincide, quedó algo tildado de más o de menos: se avisa, no se
+            # corrige (best-effort). Solo tiene sentido si se pudieron leer
+            # TODOS los 'Total Leer' del lote.
             sumado = sum(cantidades.values())
-            delta = self._leer_contador() - contador_inicial
-            if len(cantidades) == len(tildadas) and delta != sumado:
-                log.warning("Suma de 'Total Leer' (%d) != lo que sumó el contador "
-                            "(%d); revisar CANTIDAD en el sheet", sumado, delta)
+            contador = self._leer_contador()
+            if len(cantidades) == len(tildadas) and contador != sumado:
+                log.warning("Suma de 'Total Leer' (%d) != contador del portal (%d); "
+                            "revisar CANTIDAD en el sheet", sumado, contador)
         return tildadas, cantidades
 
     def _verificar_tildes(self, pares: list, tildadas: set, con_loc: bool) -> None:
@@ -456,13 +486,12 @@ class Portal:
         y devuelve la CANTIDAD total de suministros seleccionados (contador).
         None = no se pudo tildar. El checkall dispara su propio mask.
 
-        El contador es ACUMULATIVO: si arranca en algo distinto de 0 hay una
-        selección residual y el total va a venir inflado (además de que esas
-        rutas se asignarían a este colector). Se avisa fuerte."""
-        residual = self._leer_contador()
-        if residual:
-            log.warning("El contador arranca en %d ANTES del CHECKALL: hay una "
-                        "selección residual y la CANTIDAD va a venir inflada", residual)
+        Ojo con el valor previo: el portal NO limpia el contador al asignar, lo
+        deja mostrando el total del lote anterior hasta que el CHECKALL lo
+        resetea. Es arrastre visual, no selección viva, así que no se descuenta
+        (contra una selección residual DE VERDAD protege destildar_visibles)."""
+        log.debug("Contador antes del CHECKALL: %d (arrastre del lote anterior)",
+                  self._leer_contador())
         for intento in range(3):
             self._sin_mask()
             chk = self._page.locator(self.CHECKALL)
@@ -551,7 +580,7 @@ class Portal:
         """Claves de las rutas que SIGUEN en la grilla de libres tras asignar
         (= NO se asignaron; >1 fila ambigua cuenta como no asignada). Además
         las DESTILDA (best-effort) para no arrastrar tildes residuales."""
-        con_loc = any((loc or "").strip() for _, loc in pares)
+        con_loc = self._hace_falta_localidad(pares)
         self._sin_mask()
         datos_r, loc_map = self._fetch_rutas(con_localidad=con_loc)
         quedan: set = set()

@@ -30,7 +30,8 @@ from collections import defaultdict
 from typing import Callable
 
 import config
-from models import CasoLocalidad, CasoRuta, Estado, clave_rl
+from models import (CasoLocalidad, CasoRuta, Estado, clave_rl,
+                    desempata_por_localidad)
 from portal import MaskAtascado, PortalInterface, ResultadoAsignacion
 from sheets_client import SheetsClient
 
@@ -217,17 +218,19 @@ def _asignar_localidad(turno: str, c: CasoLocalidad, portal: PortalInterface,
 
 
 def _validar_ruta(casos: list[CasoRuta], sheets: SheetsClient) -> list[CasoRuta]:
-    """Reglas: turno y ruta obligatorios; colector obligatorio; en turno 43 la
-    localidad es obligatoria (desempate); en el resto puede ir vacía."""
+    """Reglas: turno y ruta obligatorios; colector obligatorio; en el turno de
+    desempate la localidad es obligatoria; en el resto se ignora (la ruta ya
+    es única, ver models.desempata_por_localidad)."""
     validos: list[CasoRuta] = []
     for c in casos:
         if not c.turno or not c.ruta:
             sheets.actualizar_estado(c, Estado.error("falta turno o ruta"))
         elif not c.colector:
             sheets.actualizar_estado(c, Estado.error("falta colector"))
-        elif c.turno == "43" and not c.localidad.strip():
-            sheets.actualizar_estado(
-                c, Estado.error("turno 43 requiere localidad (desempate de ruta)"))
+        elif desempata_por_localidad(c.turno) and not c.localidad.strip():
+            sheets.actualizar_estado(c, Estado.error(
+                f"turno {config.TURNO_DESEMPATE_LOCALIDAD} requiere localidad "
+                "(desempate de ruta)"))
         else:
             validos.append(c)
     _detectar_duplicados(validos, sheets)

@@ -47,5 +47,10 @@ COL_COLECTOR = "COLECTOR"
 COL_ESTADO = "ESTADO"
 COL_CANTIDAD = "CANTIDAD"   # opcional: suministros seleccionados (se escribe)
 
+# Único turno con rutas de 3 dígitos, que SE REPITEN entre localidades: ahí la
+# LOCALIDAD de la planilla desempata. En los demás turnos la ruta ya es única y
+# la localidad es informativa: usarla para filtrar solo genera falsos negativos.
+TURNO_DESEMPATE_LOCALIDAD = "43"
+
 # --- Logging ------------------------------------------------------------------
 LOG_DIR = _BASE / "logs"

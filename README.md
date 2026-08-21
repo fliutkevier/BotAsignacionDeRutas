@@ -53,7 +53,7 @@ rompe es renombrar una columna requerida.
 |---|---|---|
 | `TURNO` | sí | |
 | `RUTA` | sí | |
-| `LOCALIDAD` | depende | **Obligatoria en turno 43** (desempata rutas con el mismo número). En el resto puede ir vacía. |
+| `LOCALIDAD` | depende | **Obligatoria en turno 43**, donde desempata rutas con el mismo número. **En los demás turnos se ignora**: la ruta ya es única, así que lo que digas acá no afecta la búsqueda (podés dejarla vacía o usarla como referencia tuya). |
 | `COLECTOR` | sí | Se busca en el desplegable por nombre: exacto primero, si no "contiene". |
 | `ESTADO` | sí | El bot lee y escribe acá. |
 | `CANTIDAD` | no | Si la columna no existe, se avisa y sigue. |
